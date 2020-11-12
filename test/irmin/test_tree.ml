@@ -14,7 +14,9 @@ end
 module StoreBuilder () =
   Irmin_mem.Make (Metadata) (Contents.String) (Path.String_list) (Branch.String)
     (Hash.BLAKE2B)
+
 module Store = StoreBuilder ()
+
 module Tree = Store.Tree
 
 type diffs = (string list * (Contents.String.t * Metadata.t) Diff.t) list
@@ -205,86 +207,85 @@ module Proof = struct
 end
 
 module TezosLightMode = struct
-
   module StoreNode = StoreBuilder ()
+
   module StoreClient = StoreBuilder ()
 
   let info = Info.empty
+
   let info_fun = Fun.const info
 
+  let print_commit msg repo commit =
+    Format.printf "%s : %a\n\n%!" msg
+      (Irmin.Type.pp_dump (Store.commit_t repo))
+      commit
+
   let new_commit t (key, value) =
-    Store.set_exn t key ~info:info_fun value
-    >>= fun () ->
-    Store.Head.get t
-    >>= fun commit ->
-    Store.Commit.hash commit |> Lwt.return
+    Store.set_exn t key ~info:info_fun value >>= fun () ->
+    Store.Head.get t >>= fun commit -> Store.Commit.hash commit |> Lwt.return
 
   let new_commit' t tree =
-    Store.set_tree_exn t ~info:info_fun [] tree
-    >>= fun () ->
-    Store.Head.get t
-    >>= fun commit ->
-    Store.Commit.hash commit |> Lwt.return
+    Store.set_tree_exn t ~info:info_fun [] tree >>= fun () ->
+    Store.Head.get t >>= fun commit -> Store.Commit.hash commit |> Lwt.return
 
   let hash_to_string = Type.to_string Store.Hash.t
 
   let show_commits repo min max () =
     let i = ref 0 in
-    Store.Repo.iter_commits
-      repo
-      ~min:[min]
-      ~max:[max]
-      ~commit:(fun h -> Printf.printf "commit %d: %s\n" !i @@ hash_to_string h; i := !i +1; Lwt.return_unit)
-      ~edge:(fun h1 h2 -> Printf.printf "%s->%s\n" (hash_to_string h1) @@ hash_to_string h2; Lwt.return_unit)
-      ~rev:false
-      ()
+    Store.Repo.iter_commits repo ~min:[ min ] ~max:[ max ]
+      ~commit:(fun h ->
+        Store.Commit.of_hash repo h >>= fun commit_opt ->
+        print_commit
+          (Printf.sprintf "commit %d" !i)
+          repo (Option.get commit_opt);
+        i := !i + 1;
+        Lwt.return_unit)
+      ~edge:(fun h1 h2 ->
+        Printf.printf "%s->%s\n" (hash_to_string h1) @@ hash_to_string h2;
+        Lwt.return_unit)
+      ~rev:false ()
 
   let test_shallow_repo_proof _ () =
-    let config = Irmin_mem.config() in
+    let config = Irmin_mem.config () in
     let branch = "master" in
-    StoreNode.Repo.v config
-    >>= fun node_repo ->
-    Store.of_branch node_repo branch
-    >>= fun node_t ->
-    let commit0 = (["a"; "b"; "c"], "0") in
-    let commit1 = (["a"; "b"; "d"], "1") in
-    new_commit node_t commit0 
-    >>= fun commit0_hash -> (* trusted commit *)
-    Store.get_tree node_t []
-    >>= fun node_tree0 ->
-    new_commit node_t commit1
-    >>= fun commit1_hash -> (* untrusted commit *)
-    Store.get_tree node_t []
-    >>= fun commit1_tree ->
-    Store.Tree.Proof.full commit1_tree
-    >>= (function
-    | Ok proof -> Lwt.return proof
-    | Error _ -> assert false)
+    StoreNode.Repo.v config >>= fun node_repo ->
+    Store.of_branch node_repo branch >>= fun node_t ->
+    let commit0 = ([ "a"; "b"; "c" ], "0") in
+    let commit1 = ([ "a"; "b"; "d" ], "1") in
+    new_commit node_t commit0 >>= fun commit0_hash ->
+    (* trusted commit *)
+    Store.get_tree node_t [] >>= fun node_tree0 ->
+    new_commit node_t commit1 >>= fun commit1_hash ->
+    (* untrusted commit *)
+    Store.get_tree node_t [] >>= fun commit1_tree ->
+    (Store.Tree.Proof.full commit1_tree >>= function
+     | Ok proof -> Lwt.return proof
+     | Error _ -> assert false)
     >>= fun _commit1_proof ->
     Stdlib.print_endline "node_repo:";
-    show_commits node_repo commit0_hash commit1_hash ()
-    >>= fun () ->
+    show_commits node_repo commit0_hash commit1_hash () >>= fun () ->
     (* I have the required data from the node. Let's build the client repo. *)
-    StoreClient.Repo.v config
-    >>= fun client_repo ->
-    Store.of_branch client_repo "apprentice"
-    >>= fun client_t ->
-    let client_0_tree = Store.Tree.shallow client_repo commit0_hash in
-    new_commit' client_t client_0_tree
-    >>= fun client_commit0_hash ->
+    StoreClient.Repo.v config >>= fun client_repo ->
+    Store.of_branch client_repo "apprentice" >>= fun client_t ->
+    let client_0_tree =
+      Store.Tree.shallow client_repo (Store.Tree.hash node_tree0)
+    in
+    new_commit' client_t client_0_tree >>= fun client_commit0_hash ->
     Stdlib.print_endline "client_repo:";
     show_commits client_repo client_commit0_hash client_commit0_hash ()
     >>= fun () ->
-    Printf.printf "%s <> %s\n" (hash_to_string commit0_hash) (hash_to_string client_commit0_hash);
-    assert (commit0_hash = client_commit0_hash); (* This fails :-( *)
+    Printf.printf "%s <> %s\n"
+      (hash_to_string commit0_hash)
+      (hash_to_string client_commit0_hash);
+    assert (commit0_hash = client_commit0_hash);
+    (* This fails :-( *)
     (* After that, here's the road to take:
 
-      * Add commit_1 to client_repo
-      * Call [verify_on_path] on _commit1_proof client_1_tree (the tree
-        after adding commit_1) ["a"; "b"; "d"] (the path to the diff
-        between commit_0 and commit_1 *)
+       * Add commit_1 to client_repo
+       * Call [verify_on_path] on _commit1_proof client_1_tree (the tree
+         after adding commit_1) ["a"; "b"; "d"] (the path to the diff
+         between commit_0 and commit_1 *)
     Lwt.return_unit
-
 end
 
 let suite =
@@ -296,5 +297,6 @@ let suite =
     tc "Proof.test_non_existent_path" Proof.test_non_existent_path;
     (* not implemented: *)
     (* tc "Proof.test_verify_path" Proof.test_verify_path; *)
-    tc "TezosLightMode.test_shallow_repo_proof" TezosLightMode.test_shallow_repo_proof;
+    tc "TezosLightMode.test_shallow_repo_proof"
+      TezosLightMode.test_shallow_repo_proof;
   ]
