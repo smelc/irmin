@@ -251,7 +251,7 @@ module TezosLightMode = struct
     (* I have the required data from the node. Let's build the client repo. *)
     StoreClient.Repo.v config
     >>= fun client_repo ->
-    Store.of_branch client_repo branch
+    Store.of_branch client_repo "apprentice"
     >>= fun client_t ->
     let client_0_tree = Store.Tree.shallow client_repo commit0_hash in
     new_commit' client_t client_0_tree
