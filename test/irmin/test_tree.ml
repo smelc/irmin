@@ -11,9 +11,10 @@ module Metadata = struct
   let default = Default
 end
 
-module Store =
+module StoreBuilder () =
   Irmin_mem.Make (Metadata) (Contents.String) (Path.String_list) (Branch.String)
     (Hash.BLAKE2B)
+module Store = StoreBuilder ()
 module Tree = Store.Tree
 
 type diffs = (string list * (Contents.String.t * Metadata.t) Diff.t) list
@@ -205,6 +206,9 @@ end
 
 module TezosLightMode = struct
 
+  module StoreNode = StoreBuilder ()
+  module StoreClient = StoreBuilder ()
+
   let info = Info.empty
   let info_fun = Fun.const info
 
@@ -227,7 +231,7 @@ module TezosLightMode = struct
   let test_shallow_repo_proof _ () =
     let config = Irmin_mem.config() in
     let branch = "master" in
-    Store.Repo.v config
+    StoreNode.Repo.v config
     >>= fun node_repo ->
     Store.of_branch node_repo branch
     >>= fun node_t ->
@@ -245,7 +249,7 @@ module TezosLightMode = struct
     | Error _ -> assert false)
     >>= fun _commit1_proof ->
     (* I have the required data from the node. Let's build the client repo. *)
-    Store.Repo.v config
+    StoreClient.Repo.v config
     >>= fun client_repo ->
     Store.of_branch client_repo branch
     >>= fun client_t ->
