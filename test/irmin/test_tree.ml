@@ -139,7 +139,7 @@ module Proof = struct
     in
     Lwt.return ()
 
-  let test_verify_path _ () =
+  let _test_verify_path _ () =
     Alcotest.(check_lwt (ok unit))
       "Empty proof is valid for the empty tree" (Ok ())
       Tree.(Proof.(verify_on_path empty) empty [])
@@ -203,6 +203,67 @@ module Proof = struct
     Lwt.return ()
 end
 
+module TezosLightMode = struct
+
+  let info = Info.empty
+  let info_fun = Fun.const info
+
+  let new_commit t (key, value) =
+    Store.set_exn t key ~info:info_fun value
+    >>= fun () ->
+    Store.Head.get t
+    >>= fun commit ->
+    Store.Commit.hash commit |> Lwt.return
+
+  let new_commit' t tree =
+    Store.set_tree_exn t ~info:info_fun [] tree
+    >>= fun () ->
+    Store.Head.get t
+    >>= fun commit ->
+    Store.Commit.hash commit |> Lwt.return
+
+  let hash_to_string = Type.to_string Store.Hash.t
+
+  let test_shallow_repo_proof _ () =
+    let config = Irmin_mem.config() in
+    let branch = "master" in
+    Store.Repo.v config
+    >>= fun node_repo ->
+    Store.of_branch node_repo branch
+    >>= fun node_t ->
+    let commit0 = (["a"; "b"; "c"], "0") in
+    let commit1 = (["a"; "b"; "d"], "1") in
+    new_commit node_t commit0 
+    >>= fun commit0_hash -> (* trusted commit *)
+    new_commit node_t commit1
+    >>= fun _commit1_hash -> (* untrusted commit *)
+    Store.get_tree node_t []
+    >>= fun commit1_tree ->
+    Store.Tree.Proof.full commit1_tree
+    >>= (function
+    | Ok proof -> Lwt.return proof
+    | Error _ -> assert false)
+    >>= fun _commit1_proof ->
+    (* I have the required data from the node. Let's build the client repo. *)
+    Store.Repo.v config
+    >>= fun client_repo ->
+    Store.of_branch client_repo branch
+    >>= fun client_t ->
+    let client_0_tree = Store.Tree.shallow client_repo commit0_hash in
+    new_commit' client_t client_0_tree
+    >>= fun client_commit0_hash ->
+    Printf.printf "%s <> %s\n" (hash_to_string commit0_hash) (hash_to_string client_commit0_hash);
+    assert (commit0_hash = client_commit0_hash); (* This fails :-( *)
+    (* After that, here's the road to take:
+
+      * Add commit_1 to client_repo
+      * Call [verify_on_path] on _commit1_proof client_1_tree (the tree
+        after adding commit_1) ["a"; "b"; "d"] (the path to the diff
+        between commit_0 and commit_1 *)
+    Lwt.return_unit
+
+end
+
 let suite =
   let tc n f = Alcotest_lwt.test_case n `Quick f in
   [
@@ -210,5 +271,7 @@ let suite =
     tc "diff" test_diff;
     tc "Proof.test_basic" Proof.test_basic;
     tc "Proof.test_non_existent_path" Proof.test_non_existent_path;
-    tc "Proof.test_verify_path" Proof.test_verify_path;
+    (* not implemented: *)
+    (* tc "Proof.test_verify_path" Proof.test_verify_path; *)
+    tc "TezosLightMode.test_shallow_repo_proof" TezosLightMode.test_shallow_repo_proof;
   ]
