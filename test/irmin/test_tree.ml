@@ -228,6 +228,17 @@ module TezosLightMode = struct
 
   let hash_to_string = Type.to_string Store.Hash.t
 
+  let show_commits repo min max () =
+    let i = ref 0 in
+    Store.Repo.iter_commits
+      repo
+      ~min:[min]
+      ~max:[max]
+      ~commit:(fun h -> Printf.printf "commit %d: %s\n" !i @@ hash_to_string h; i := !i +1; Lwt.return_unit)
+      ~edge:(fun h1 h2 -> Printf.printf "%s->%s\n" (hash_to_string h1) @@ hash_to_string h2; Lwt.return_unit)
+      ~rev:false
+      ()
+
   let test_shallow_repo_proof _ () =
     let config = Irmin_mem.config() in
     let branch = "master" in
@@ -239,8 +250,10 @@ module TezosLightMode = struct
     let commit1 = (["a"; "b"; "d"], "1") in
     new_commit node_t commit0 
     >>= fun commit0_hash -> (* trusted commit *)
+    Store.get_tree node_t []
+    >>= fun node_tree0 ->
     new_commit node_t commit1
-    >>= fun _commit1_hash -> (* untrusted commit *)
+    >>= fun commit1_hash -> (* untrusted commit *)
     Store.get_tree node_t []
     >>= fun commit1_tree ->
     Store.Tree.Proof.full commit1_tree
@@ -248,6 +261,9 @@ module TezosLightMode = struct
     | Ok proof -> Lwt.return proof
     | Error _ -> assert false)
     >>= fun _commit1_proof ->
+    Stdlib.print_endline "node_repo:";
+    show_commits node_repo commit0_hash commit1_hash ()
+    >>= fun () ->
     (* I have the required data from the node. Let's build the client repo. *)
     StoreClient.Repo.v config
     >>= fun client_repo ->
@@ -256,6 +272,9 @@ module TezosLightMode = struct
     let client_0_tree = Store.Tree.shallow client_repo commit0_hash in
     new_commit' client_t client_0_tree
     >>= fun client_commit0_hash ->
+    Stdlib.print_endline "client_repo:";
+    show_commits client_repo client_commit0_hash client_commit0_hash ()
+    >>= fun () ->
     Printf.printf "%s <> %s\n" (hash_to_string commit0_hash) (hash_to_string client_commit0_hash);
     assert (commit0_hash = client_commit0_hash); (* This fails :-( *)
     (* After that, here's the road to take:
