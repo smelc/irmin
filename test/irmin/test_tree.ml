@@ -230,9 +230,17 @@ module TezosLightMode = struct
 
   let hash_to_string = Type.to_string Store.Hash.t
 
-  let show_commits repo min max () =
+  let show_commits repo () =
+    let commits = ref [] in
+    Store.Repo.export repo >>= fun slice ->
+    Store.Private.Slice.iter slice (function
+      | `Node _ | `Contents _ -> Lwt.return_unit
+      | `Commit (h, _) ->
+          commits := h :: !commits;
+          Lwt.return_unit)
+    >>= fun () ->
     let i = ref 0 in
-    Store.Repo.iter_commits repo ~min:[ min ] ~max:[ max ]
+    Store.Repo.iter_commits repo ~min:!commits ~max:!commits
       ~commit:(fun h ->
         Store.Commit.of_hash repo h >>= fun commit_opt ->
         print_commit
@@ -243,7 +251,7 @@ module TezosLightMode = struct
       ~edge:(fun h1 h2 ->
         Printf.printf "%s->%s\n" (hash_to_string h1) @@ hash_to_string h2;
         Lwt.return_unit)
-      ~rev:false ()
+      ~rev:true ()
 
   let test_shallow_repo_proof _ () =
     let config = Irmin_mem.config () in
@@ -263,25 +271,25 @@ module TezosLightMode = struct
      | Error _ -> assert false)
     >>= fun _commit1_proof ->
     Stdlib.print_endline "node_repo:";
-    show_commits node_repo commit0_hash commit1_hash () >>= fun () ->
+    show_commits node_repo () >>= fun () ->
     (* I have the required data from the node. Let's build the client repo. *)
     StoreClient.Repo.v config >>= fun client_repo ->
-    Store.of_branch client_repo "apprentice" >>= fun client_t ->
+    Store.of_branch client_repo branch >>= fun client_t ->
     let client_0_tree =
       Store.Tree.shallow client_repo (Store.Tree.hash node_tree0)
     in
     new_commit' client_t client_0_tree >>= fun client_commit0_hash ->
+    assert (commit0_hash = client_commit0_hash);
+    new_commit client_t commit1 >>= fun client_commit1_hash ->
     Stdlib.print_endline "client_repo:";
-    show_commits client_repo client_commit0_hash client_commit0_hash ()
+    show_commits client_repo ()
     >>= fun () ->
     Printf.printf "%s <> %s\n"
-      (hash_to_string commit0_hash)
-      (hash_to_string client_commit0_hash);
-    assert (commit0_hash = client_commit0_hash);
-    (* This fails :-( *)
+      (hash_to_string commit1_hash)
+      (hash_to_string client_commit1_hash);
+    assert (commit1_hash = client_commit1_hash);
     (* After that, here's the road to take:
 
-       * Add commit_1 to client_repo
        * Call [verify_on_path] on _commit1_proof client_1_tree (the tree
          after adding commit_1) ["a"; "b"; "d"] (the path to the diff
          between commit_0 and commit_1 *)
