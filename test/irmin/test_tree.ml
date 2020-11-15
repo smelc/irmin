@@ -239,19 +239,27 @@ module TezosLightMode = struct
           commits := h :: !commits;
           Lwt.return_unit)
     >>= fun () ->
-    let i = ref 0 in
+    let i = ref (List.length !commits - 1) in
     Store.Repo.iter_commits repo ~min:!commits ~max:!commits
       ~commit:(fun h ->
         Store.Commit.of_hash repo h >>= fun commit_opt ->
         print_commit
           (Printf.sprintf "commit %d" !i)
           repo (Option.get commit_opt);
-        i := !i + 1;
+        i := !i - 1;
         Lwt.return_unit)
       ~edge:(fun h1 h2 ->
         Printf.printf "%s->%s\n" (hash_to_string h1) @@ hash_to_string h2;
         Lwt.return_unit)
       ~rev:true ()
+
+  let show_concrete_tree msg t () =
+    Store.get_tree t [] >>= fun tree ->
+    Store.Tree.to_concrete tree >>= fun concrete ->
+    Format.printf "%s: %a\n\n%!" msg
+      (Irmin.Type.pp_dump Store.Tree.concrete_t)
+      concrete;
+    Lwt.return_unit
 
   let test_shallow_repo_proof _ () =
     let config = Irmin_mem.config () in
@@ -282,8 +290,9 @@ module TezosLightMode = struct
     assert (commit0_hash = client_commit0_hash);
     new_commit client_t commit1 >>= fun client_commit1_hash ->
     Stdlib.print_endline "client_repo:";
-    show_commits client_repo ()
-    >>= fun () ->
+    show_commits client_repo () >>= fun () ->
+    show_concrete_tree "tree of node_t" node_t () >>= fun () ->
+    show_concrete_tree "tree of client_t" client_t () >>= fun () ->
     Printf.printf "%s <> %s\n"
       (hash_to_string commit1_hash)
       (hash_to_string client_commit1_hash);
