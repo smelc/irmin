@@ -261,7 +261,12 @@ module TezosLightMode = struct
       concrete;
     Lwt.return_unit
 
-  let test_shallow_repo_proof _ () =
+  let show_tree msg t () =
+    Store.get_tree t [] >>= fun tree ->
+    Format.printf "%s: %a\n\n%!" msg (Irmin.Type.pp_dump Store.tree_t) tree;
+    Lwt.return_unit
+
+  let _test_shallow_repo_proof _ () =
     let config = Irmin_mem.config () in
     let branch = "master" in
     StoreNode.Repo.v config >>= fun node_repo ->
@@ -303,6 +308,82 @@ module TezosLightMode = struct
          after adding commit_1) ["a"; "b"; "d"] (the path to the diff
          between commit_0 and commit_1 *)
     Lwt.return_unit
+
+  (* type concrete =
+     [ `Tree of (Path.step * concrete) list
+     | `Contents of P.Contents.Val.t * Metadata.t ] *)
+
+  let test_shallow_repo_proof' _ () =
+    let config = Irmin_mem.config () in
+    let branch = "master" in
+    StoreNode.Repo.v config >>= fun node_repo ->
+    Store.of_branch node_repo branch >>= fun node_t ->
+    let commit0 = ([ "a"; "b"; "c" ], "0") in
+    let commit1 = ([ "a"; "b"; "d" ], "1") in
+    new_commit node_t commit0 >>= fun commit0_hash ->
+    (* trusted commit *)
+    Store.get_tree node_t [] >>= fun _node_tree0 ->
+    Store.get_tree node_t (fst commit0) >>= fun persistent_tree_path ->
+    let persistent_tree_hash = Store.Tree.hash persistent_tree_path in
+    new_commit node_t commit1 >>= fun commit1_hash ->
+    (* untrusted commit *)
+    Store.get_tree node_t [] >>= fun commit1_tree ->
+    (Store.Tree.Proof.full commit1_tree >|= function
+     | Ok proof -> Lwt.return proof
+     | Error _ -> assert false)
+    >>= fun _commit1_proof ->
+    Stdlib.print_endline "node_repo:";
+    show_commits node_repo () >>= fun () ->
+    show_concrete_tree "concrete tree of node_t" node_t () >>= fun () ->
+    show_tree "tree of node_t" node_t () >>= fun () ->
+    (* I have the required data from the node. Let's build the client repo. *)
+    StoreClient.Repo.v config >>= fun client_repo ->
+    Store.of_branch client_repo branch >>= fun client_t ->
+    let _ = Store.Tree.of_hash (* no it's a getter *) in
+    let _ = Store.Tree.of_node in
+    let _ = Store.Tree.of_contents in
+    let _ =
+      Store.Tree.v
+      (* [< `Contents of string * Metadata.t | `Node of Store.node ] -> ..
+         but I don't see how obtaining Store.node values *)
+    in
+    let _ =
+      Store.Tree.of_concrete
+      (* accepts recursive contents, but not hashes *)
+    in
+    let client_0_tree_leaf =
+      Store.Tree.shallow client_repo persistent_tree_hash
+    in
+    Store.Tree.add_tree Store.Tree.empty (fst commit0) client_0_tree_leaf
+    >>= fun client_0_tree ->
+    (* Yields correct tree: *)
+    (* let client_0_tree_leaf = Store.Tree.of_contents (snd commit0) in
+       Store.Tree.add_tree Store.Tree.empty [ "a"; "b"; "c" ] client_0_tree_leaf
+       >>= fun client_0_tree -> *)
+    (* Let's try using the shallow tree: *)
+    new_commit' client_t client_0_tree >>= fun client_commit0_hash ->
+    Stdlib.print_endline "client_repo:";
+    show_commits client_repo () >>= fun () ->
+    (* fails with [failure] Encountered dangling hash e9f11462...: (indeed!)*)
+    (* show_concrete_tree "tree of client_t" client_t () >>= fun () -> *)
+    show_tree "tree of client_t" client_t () >>= fun () ->
+    Printf.printf "%s <> %s\n"
+      (hash_to_string commit0_hash)
+      (hash_to_string client_commit0_hash);
+    assert (commit0_hash = client_commit0_hash);
+    new_commit client_t commit1 >>= fun client_commit1_hash ->
+    Stdlib.print_endline "client_repo:";
+    show_commits client_repo () >>= fun () ->
+    Printf.printf "%s <> %s\n"
+      (hash_to_string commit1_hash)
+      (hash_to_string client_commit1_hash);
+    assert (commit1_hash = client_commit1_hash);
+    (* After that, here's the road to take:
+
+       * Call [verify_on_path] on _commit1_proof client_1_tree (the tree
+         after adding commit_1) ["a"; "b"; "d"] (the path to the diff
+         between commit_0 and commit_1 *)
+    Lwt.return_unit
 end
 
 let suite =
@@ -314,6 +395,8 @@ let suite =
     tc "Proof.test_non_existent_path" Proof.test_non_existent_path;
     (* not implemented: *)
     (* tc "Proof.test_verify_path" Proof.test_verify_path; *)
-    tc "TezosLightMode.test_shallow_repo_proof"
-      TezosLightMode.test_shallow_repo_proof;
+    (* tc "TezosLightMode.test_shallow_repo_proof"
+       TezosLightMode.test_shallow_repo_proof; *)
+    tc "TezosLightMode.test_shallow_repo_proof'"
+      TezosLightMode.test_shallow_repo_proof';
   ]
