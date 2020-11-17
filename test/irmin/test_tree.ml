@@ -331,7 +331,7 @@ module TezosLightMode = struct
     new_commit node_t commit0 >>= fun commit0_hash ->
     (* trusted commit *)
     Store.get_tree node_t [] >>= fun _node_tree0 ->
-    new_commit node_t commit1 >>= fun _commit1_hash ->
+    new_commit node_t commit1 >>= fun commit1_hash ->
     (* untrusted commit *)
     Store.get_tree node_t [] >>= fun commit1_tree ->
     (Store.Tree.Proof.full commit1_tree >|= function
@@ -365,6 +365,19 @@ module TezosLightMode = struct
     show_tree "tree of client_t" client_t () >>= fun () ->
     (* Passes *)
     assert (commit0_hash = client_commit0_hash);
+    Stdlib.print_endline "********************";
+    Stdlib.print_endline "* Now onto commit1 *";
+    Stdlib.print_endline "********************\n";
+    new_commit client_t commit1 >>= fun client_commit1_hash ->
+    Stdlib.print_endline "client_repo:";
+    show_commits client_repo () >>= fun () ->
+    show_concrete_tree "concrete tree of client_t" client_t () >>= fun () ->
+    show_tree "tree of client_t" client_t () >>= fun () ->
+    Printf.printf "%s <> %s\n"
+      (hash_to_string commit1_hash)
+      (hash_to_string client_commit1_hash);
+    (* FAILS *)
+    assert (commit1_hash = client_commit1_hash);
     Lwt.return_unit
 end
 
