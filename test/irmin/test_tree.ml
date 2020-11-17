@@ -292,6 +292,7 @@ module TezosLightMode = struct
       Store.Tree.shallow client_repo (Store.Tree.hash node_tree0)
     in
     new_commit' client_t client_0_tree >>= fun client_commit0_hash ->
+    (* Passes *)
     assert (commit0_hash = client_commit0_hash);
     new_commit client_t commit1 >>= fun client_commit1_hash ->
     Stdlib.print_endline "client_repo:";
@@ -301,7 +302,18 @@ module TezosLightMode = struct
     Printf.printf "%s <> %s\n"
       (hash_to_string commit1_hash)
       (hash_to_string client_commit1_hash);
+    (* FAILS *)
     assert (commit1_hash = client_commit1_hash);
+    (* Trees differ:
+       tree of node_t:   Tree ([("a",
+                           Tree ([("b",
+                                   Tree ([("d", Contents (("1", Default)));
+                                           ("c", Contents (("0", Default)))]))]))])
+
+       tree of client_t: Tree ([("a",
+                           Tree ([("b",
+                                   Tree ([("d", Contents (("1", Default)))]))]))])
+    *)
     (* After that, here's the road to take:
 
        * Call [verify_on_path] on _commit1_proof client_1_tree (the tree
@@ -319,8 +331,6 @@ module TezosLightMode = struct
     new_commit node_t commit0 >>= fun commit0_hash ->
     (* trusted commit *)
     Store.get_tree node_t [] >>= fun _node_tree0 ->
-    Store.get_tree node_t (fst commit0) >>= fun persistent_tree_path ->
-    let persistent_tree_hash = Store.Tree.hash persistent_tree_path in
     new_commit node_t commit1 >>= fun _commit1_hash ->
     (* untrusted commit *)
     Store.get_tree node_t [] >>= fun commit1_tree ->
@@ -335,10 +345,12 @@ module TezosLightMode = struct
     (* I have the required data from the node. Let's build the client repo. *)
     StoreClient.Repo.v config >>= fun client_repo ->
     Store.of_branch client_repo branch >>= fun client_t ->
-    let client_0_tree_leaf =
-      Store.Tree.shallow client_repo persistent_tree_hash
-    in
-    Store.Tree.add_tree Store.Tree.empty (fst commit0) client_0_tree_leaf
+    Store.Tree.add_tree Store.Tree.empty [ "c" ]
+      (Store.Tree.of_contents @@ snd commit0)
+    >>= fun blinded_subtree ->
+    Store.Tree.hash blinded_subtree
+    |> Store.Tree.shallow client_repo
+    |> Store.Tree.add_tree Store.Tree.empty [ "a"; "b" ]
     >>= fun client_0_tree ->
     (* Yields correct tree: *)
     (* let client_0_tree_leaf = Store.Tree.of_contents (snd commit0) in
@@ -348,14 +360,11 @@ module TezosLightMode = struct
     new_commit' client_t client_0_tree >>= fun client_commit0_hash ->
     Stdlib.print_endline "client_repo:";
     show_commits client_repo () >>= fun () ->
-    (* fails with [failure] Encountered dangling hash e9f11462...: (indeed!)*)
+    (* Fails with "Encountered dangling hash ...: (yes there is) "*)
     (* show_concrete_tree "tree of client_t" client_t () >>= fun () -> *)
     show_tree "tree of client_t" client_t () >>= fun () ->
-    Printf.printf "%s <> %s\n"
-      (hash_to_string commit0_hash)
-      (hash_to_string client_commit0_hash);
+    (* Passes *)
     assert (commit0_hash = client_commit0_hash);
-    (* Fails :-( *)
     Lwt.return_unit
 end
 
@@ -369,7 +378,7 @@ let suite =
     (* not implemented: *)
     (* tc "Proof.test_verify_path" Proof.test_verify_path; *)
     (* tc "TezosLightMode.test_shallow_repo_proof"
-       TezosLightMode.test_shallow_repo_proof; *)
+       TezosLightMode._test_shallow_repo_proof; *)
     tc "TezosLightMode.test_shallow_repo_proof'"
       TezosLightMode.test_shallow_repo_proof';
   ]
